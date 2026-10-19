@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TA Claim Management System</title>
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- SheetJS (xlsx) for Excel Export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- Firebase JS SDK v9 compatibility build -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+  <style>
+    body { background-color: #f4f6f9; font-family: 'Segoe UI', Roboto, sans-serif; }
+    .card-header { font-weight: 700; }
+    .summary-card { background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; transition: transform 0.15s ease-in-out; }
+    .summary-card:hover { transform: translateY(-2px); }
+    .badge-not-charged { background-color: #fff7ed; color: #c2410c; border: 1px solid #ffedd5; font-weight: 600; }
+    .badge-charged { background-color: #f0fdf4; color: #15803d; border: 1px solid #dcfce7; font-weight: 600; }
+    .status-badge-online { background-color: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
+    .status-badge-offline { background-color: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+  </style>
+</head>
+<body class="p-3 p-md-4">
+
+<div class="container-fluid">
+  <!-- Header & Live Sync Status -->
+  <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div>
+      <h2 class="text-primary fw-bold mb-1"><i class="fa-solid fa-calculator me-2"></i>TA Claim Management System</h2>
+      <p class="text-muted small mb-0">Track, vet, and summarize TA claims across multiple locations in real-time.</p>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <span id="syncBadge" class="badge status-badge-offline py-2 px-3 fs-6 rounded-pill">
+        <i class="fa-solid fa-circle-dot me-1"></i> 🟡 Offline / Local Mode
+      </span>
+      <button class="btn btn-sm btn-outline-primary shadow-sm" data-bs-toggle="modal" data-bs-target="#firebaseModal">
+        <i class="fa-solid fa-gear me-1"></i> Sync Settings
+      </button>
+    </div>
+  </div>
+
+  <div class="row g-4">
+    <!-- Entry / Edit Form -->
+    <div class="col-lg-4">
+      <div class="card shadow-sm border-0" id="formCard">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center py-3">
+          <span id="formHeader" class="fs-6"><i class="fa-solid fa-pen-to-square me-2"></i>Data Entry Form</span>
+          <span class="badge bg-light text-primary fw-semibold" id="formModeBadge">Entry Mode</span>
+        </div>
+        <div class="card-body p-4">
+          <form id="taForm">
+            <input type="hidden" id="editRecordId" value="">
+            
+            <!-- 1. Dealer Name (Manual text feed) -->
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Dealer Name <span class="text-danger">*</span></label>
+              <input type="text" class="form-control" id="dealerName" placeholder="Enter Dealer Name" required>
+            </div>
+
+            <!-- 2. Date of feeding data -->
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Date of Feeding Data <span class="text-danger">*</span></label>
+              <input type="date" class="form-control" id="feedDate" required>
+            </div>
+
+            <!-- 3. Month of TA Claimed (MM/YYYY) -->
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Month of TA Claimed (MM/YYYY) <span class="text-danger">*</span></label>
+              <input type="month" class="form-control" id="taMonth" required>
+            </div>
+
+            <!-- 4. Bill unit no. -->
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Bill Unit No. <span class="text-danger">*</span></label>
+              <input type="text" class="form-control" id="billUnit" placeholder="e.g., BU-1001" required>
+            </div>
+
+            <!-- 5. TA claimed amount -->
+            <div class="row g-2 mb-3">
+              <div class="col-6">
+                <label class="form-label fw-semibold">Claimed Amount (₹) <span class="text-danger">*</span></label>
+                <input type="number" step="0.01" min="0" class="form-control" id="claimedAmt" oninput="calculateVetted()" placeholder="0.00" required>
+              </div>
+              <!-- 6. TA saved amount -->
+              <div class="col-6">
+                <label class="form-label fw-semibold">Saved Amount (₹) <span class="text-danger">*</span></label>
+                <input type="number" step="0.01" min="0" class="form-control" id="savedAmt" value="0.00" oninput="calculateVetted()" required>
+              </div>
+            </div>
+
+            <!-- 7. TA vetted amount (Auto calculated: Claimed - Saved) -->
+            <div class="mb-3">
+              <label class="form-label fw-semibold text-primary">TA Vetted Amount (Auto-Calculated) (₹)</label>
+              <input type="number" step="0.01" class="form-control bg-light fw-bold text-dark" id="vettedAmt" readonly placeholder="0.00">
+              <div class="form-text small">Formula: Claimed Amount − Saved Amount</div>
+            </div>
+
+            <!-- 8. Unvetted TA Amount (Manual entry) -->
+            <div class="mb-3">
+              <label class="form-label fw-semibold text-warning-emphasis">Unvetted TA Amount (Manual) (₹)</label>
+              <input type="number" step="0.01" min="0" class="form-control" id="unvettedAmt" value="0.00" placeholder="0.00">
+            </div>
+
+            <!-- 9. TA Vetted Charged Month (MM/YYYY - Optional) -->
+            <div class="mb-4">
+              <label class="form-label fw-semibold">TA Vetted Charged Month (MM/YYYY)</label>
+              <input type="month" class="form-control" id="chargedMonth">
+              <div class="form-text text-muted small">If left blank, status defaults to <strong>'Yet not charged'</strong>.</div>
+            </div>
+
+            <button type="submit" class="btn btn-success w-100 py-2 fw-semibold" id="submitBtn"><i class="fa-solid fa-floppy-disk me-1"></i> Save Record</button>
+            <button type="button" class="btn btn-secondary w-100 mt-2 py-2 d-none" id="cancelBtn" onclick="resetForm()"><i class="fa-solid fa-xmark me-1"></i> Cancel Edit</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Data Display & Summary -->
+    <div class="col-lg-8">
+      <!-- Grand Totals Summary Cards -->
+      <div class="row g-3 mb-4">
+        <div class="col-md-2-4 col-sm-6">
+          <div class="card summary-card text-center p-3 shadow-sm">
+            <h6 class="text-muted small text-uppercase fw-bold mb-1">Total Claimed</h6>
+            <h5 class="text-primary fw-bold mb-0" id="sumClaimed">₹ 0.00</h5>
+          </div>
+        </div>
+        <div class="col-md-2-4 col-sm-6">
+          <div class="card summary-card text-center p-3 shadow-sm">
+            <h6 class="text-muted small text-uppercase fw-bold mb-1">Total Saved</h6>
+            <h5 class="text-success fw-bold mb-0" id="sumSaved">₹ 0.00</h5>
+          </div>
+        </div>
+        <div class="col-md-2-4 col-sm-6">
+          <div class="card summary-card text-center p-3 shadow-sm">
+            <h6 class="text-muted small text-uppercase fw-bold mb-1">Total Vetted</h6>
+            <h5 class="text-info fw-bold mb-0" id="sumVetted">₹ 0.00</h5>
+          </div>
+        </div>
+        <div class="col-md-2-4 col-sm-6">
+          <div class="card summary-card text-center p-3 shadow-sm">
+            <h6 class="text-muted small text-uppercase fw-bold mb-1">Total Unvetted</h6>
+            <h5 class="text-warning text-dark fw-bold mb-0" id="sumUnvetted">₹ 0.00</h5>
+          </div>
+        </div>
+        <div class="col-md-2-4 col-sm-6">
+          <div class="card summary-card text-center p-3 shadow-sm">
+            <h6 class="text-muted small text-uppercase fw-bold mb-1">Yet Not Charged</h6>
+            <h5 class="text-danger fw-bold mb-0" id="notChargedCount">0 Records</h5>
+          </div>
+        </div>
+      </div>
+
+      <!-- Toolbar Controls -->
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h5 class="mb-0 fw-bold"><i class="fa-solid fa-table-list me-2"></i>Claim Records</h5>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-success shadow-sm" onclick="exportToExcel()"><i class="fa-solid fa-file-excel me-1"></i> Export Excel</button>
+          <button class="btn btn-sm btn-outline-secondary shadow-sm" onclick="exportJSON()"><i class="fa-solid fa-download me-1"></i> Backup JSON</button>
+          <label class="btn btn-sm btn-outline-primary shadow-sm mb-0">
+            <i class="fa-solid fa-upload me-1"></i> Import JSON 
+            <input type="file" id="importFile" accept=".json" onchange="importData(event)" hidden>
+          </label>
+        </div>
+      </div>
+
+      <!-- Detailed Records Table -->
+      <div class="table-responsive bg-white shadow-sm rounded mb-4" style="max-height: 380px; overflow-y: auto;">
+        <table class="table table-bordered align-middle text-center mb-0" id="recordsTable">
+          <thead class="table-dark sticky-top">
+            <tr>
+              <th>Dealer</th>
+              <th>Feed Date</th>
+              <th>TA Month</th>
+              <th>Bill Unit</th>
+              <th>Claimed (₹)</th>
+              <th>Saved (₹)</th>
+              <th>Vetted (₹)</th>
+              <th>Unvetted (₹)</th>
+              <th>Charged Month</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tableBody">
+            <tr><td colspan="10" class="text-muted py-4">No TA records logged yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Bill Unit Wise Summary Table -->
+      <h5 class="fw-bold mb-3"><i class="fa-solid fa-chart-pie me-2 text-primary"></i>Bill Unit Wise Summary</h5>
+      <div class="table-responsive bg-white shadow-sm rounded">
+        <table class="table table-striped table-hover align-middle text-center mb-0">
+          <thead class="table-secondary">
+            <tr>
+              <th>Bill Unit No.</th>
+              <th>Count</th>
+              <th>Total Claimed (₹)</th>
+              <th>Total Saved (₹)</th>
+              <th>Total Vetted (₹)</th>
+              <th>Total Unvetted (₹)</th>
+              <th>Charged Status</th>
+            </tr>
+          </thead>
+          <tbody id="summaryBody">
+            <tr><td colspan="7" class="text-muted py-3">No summary data available</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Firebase Config Settings Modal -->
+<div class="modal fade" id="firebaseModal" tabindex="-1" aria-labelledby="firebaseModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title" id="firebaseModalLabel"><i class="fa-solid fa-cloud-bolt me-2"></i>Firebase Online Sync Settings</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body p-4">
+        <p class="text-muted small">Enter your Firebase Web App configuration below to synchronize claim records in real-time across multiple computers simultaneously.</p>
+        <form id="firebaseConfigForm">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label fw-semibold">API Key</"AIzaSyCSBwSKJTVAdaQE3SszcBWRN8Dm1IJaGYg">
+              <input type="text" class="form-control form-control-sm" id="cfg_apiKey" placeholder="AIzaSy...">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-semibold">Auth Domain</label>
+              <input type="text" class="form-control form-control-sm" id="cfg_authDomain" placeholder="app-id.firebaseapp.com">
+            </div>
+            <div class="col-md-12">
+              <label class="form-label fw-semibold">Database URL (Realtime DB) <span class="text-danger">*</span></label>
+              <input type="text" class="form-control form-control-sm" id="cfg_databaseURL" placeholder="https://app-id-default-rtdb.firebaseio.com">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-semibold">Project ID</"ta-register-6e68b">
+              <input type="text" class="form-control form-control-sm" id="cfg_projectId" placeholder="app-id">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-semibold">Storage Bucket</label>
+              <input type="text" class="form-control form-control-sm" id="cfg_storageBucket" placeholder="app-id.appspot.com">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-semibold">Messaging Sender ID</label>
+              <input type="text" class="form-control form-control-sm" id="cfg_messagingSenderId" placeholder="123456789">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-semibold">App ID</label>
+              <input type="text" class="form-control form-control-sm" id="cfg_appId" placeholder="1:123456789:web:abc...">
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer d-flex justify-content-between">
+        <button type="button" class="btn btn-outline-danger btn-sm" onclick="clearFirebaseConfig()"><i class="fa-solid fa-trash me-1"></i> Clear & Use Local Mode</button>
+        <div>
+          <button type="button" class="btn btn-secondary btn-sm me-2" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-success btn-sm" onclick="saveFirebaseConfig()"><i class="fa-solid fa-plug me-1"></i> Save & Connect Cloud Sync</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bootstrap 5 JS Bundle -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+  let firebaseApp = null;
+  let dbRef = null;
+  let localData = [];
+
+  // --- 1. FIREBASE INITIALIZATION & MODE HANDLING ---
+  function initFirebase() {
+    const savedConfig = localStorage.getItem("ta_firebase_config");
+    if (savedConfig) {
+      try {
+        const config = JSON.parse(savedConfig);
+        if (config.databaseURL && config.databaseURL.trim() !== "") {
+          if (!firebase.apps.length) {
+            firebaseApp = firebase.initializeApp(config);
+          } else {
+            firebaseApp = firebase.app();
+          }
+          dbRef = firebase.database().ref("ta_claims");
+          
+          // Setup real-time sync listener
+          dbRef.on("value", (snapshot) => {
+            const data = snapshot.val();
+            localData = data ? Object.keys(data).map(key => ({ id: key, ...data[key] })) : [];
+            renderUI();
+          }, (error) => {
+            console.error("Firebase sync error:", error);
+            updateSyncBadge(false, "Connection Error");
+          });
+
+          updateSyncBadge(true);
+          populateConfigForm(config);
+          return;
+        }
+      } catch (err) {
+        console.error("Invalid Firebase configuration format", err);
+      }
+    }
+
+    // Local Storage Fallback
+    dbRef = null;
+    const savedLocal = localStorage.getItem("ta_claims_local");
+    if (savedLocal) localData = JSON.parse(savedLocal);
+    updateSyncBadge(false);
+  }
+
+  function updateSyncBadge(isOnline, customMsg) {
+    const badge = document.getElementById('syncBadge');
+    if (isOnline) {
+      badge.className = "badge status-badge-online py-2 px-3 fs-6 rounded-pill";
+      badge.innerHTML = `<i class="fa-solid fa-wifi me-1"></i> 🟢 Online & Synced (Firebase Connected)`;
+    } else {
+      badge.className = "badge status-badge-offline py-2 px-3 fs-6 rounded-pill";
+      badge.innerHTML = `<i class="fa-solid fa-hard-drive me-1"></i> 🟡 ${customMsg || 'Offline / Local Mode'}`;
+    }
+  }
+
+  function saveFirebaseConfig() {
+    const config = {
+      apiKey: document.getElementById('cfg_apiKey').value.trim(),
+      authDomain: document.getElementById('cfg_authDomain').value.trim(),
+      databaseURL: document.getElementById('cfg_databaseURL').value.trim(),
+      projectId: document.getElementById('cfg_projectId').value.trim(),
+      storageBucket: document.getElementById('cfg_storageBucket').value.trim(),
+      messagingSenderId: document.getElementById('cfg_messagingSenderId').value.trim(),
+      appId: document.getElementById('cfg_appId').value.trim()
+    };
+
+    if (!config.databaseURL) {
+      alert("Please enter at least a valid Realtime Database URL.");
+      return;
+    }
+
+    localStorage.setItem("ta_firebase_config", JSON.stringify(config));
+    alert("Firebase settings saved! Reloading synchronization connection...");
+    location.reload();
+  }
+
+  function clearFirebaseConfig() {
+    if (confirm("Disconnect from Cloud Sync and switch back to Local Mode?")) {
+      localStorage.removeItem("ta_firebase_config");
+      location.reload();
+    }
+  }
+
+  function populateConfigForm(config) {
+    document.getElementById('cfg_apiKey').value = config.apiKey || '';
+    document.getElementById('cfg_authDomain').value = config.authDomain || '';
+    document.getElementById('cfg_databaseURL').value = config.databaseURL || '';
+    document.getElementById('cfg_projectId').value = config.projectId || '';
+    document.getElementById('cfg_storageBucket').value = config.storageBucket || '';
+    document.getElementById('cfg_messagingSenderId').value = config.messagingSenderId || '';
+    document.getElementById('cfg_appId').value = config.appId || '';
+  }
+
+  // --- 2. CALCULATIONS & FORM LOGIC ---
+  function calculateVetted() {
+    const claimed = parseFloat(document.getElementById('claimedAmt').value) || 0;
+    const saved = parseFloat(document.getElementById('savedAmt').value) || 0;
+    document.getElementById('vettedAmt').value = Math.max(0, claimed - saved).toFixed(2);
+  }
+
+  function formatMonthYYYY(val) {
+    if (!val || !val.trim()) return '';
+    if (val.includes('-')) {
+      const parts = val.split('-');
+      if (parts.length === 2) return `${parts[1]}/${parts[0]}`;
+    }
+    return val;
+  }
+
+  document.getElementById('taForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const editId = document.getElementById('editRecordId').value;
+    const record = {
+      dealer: document.getElementById('dealerName').value.trim(),
+      feedDate: document.getElementById('feedDate').value,
+      taMonth: document.getElementById('taMonth').value,
+      billUnit: document.getElementById('billUnit').value.trim().toUpperCase(),
+      claimed: parseFloat(document.getElementById('claimedAmt').value) || 0,
+      saved: parseFloat(document.getElementById('savedAmt').value) || 0,
+      vetted: parseFloat(document.getElementById('vettedAmt').value) || 0,
+      unvetted: parseFloat(document.getElementById('unvettedAmt').value) || 0,
+      chargedMonth: document.getElementById('chargedMonth').value.trim()
+    };
+
+    if (editId) {
+      if (dbRef) {
+        dbRef.child(editId).update(record);
+      } else {
+        const index = localData.findIndex(item => item.id === editId);
+        if (index !== -1) {
+          localData[index] = { id: editId, ...record };
+          saveLocalStorage();
+          renderUI();
+        }
+      }
+      resetForm();
+    } else {
+      if (dbRef) {
+        dbRef.push(record);
+      } else {
+        record.id = 'rec_' + Date.now();
+        localData.push(record);
+        saveLocalStorage();
+        renderUI();
+      }
+      this.reset();
+      document.getElementById('vettedAmt').value = '';
+    }
+  });
+
+  function editRecord(id) {
+    const item = localData.find(d => d.id === id);
+    if (!item) return;
+
+    document.getElementById('editRecordId').value = item.id;
+    document.getElementById('dealerName').value = item.dealer || '';
+    document.getElementById('feedDate').value = item.feedDate || '';
+    document.getElementById('taMonth').value = item.taMonth || '';
+    document.getElementById('billUnit').value = item.billUnit || '';
+    document.getElementById('claimedAmt').value = item.claimed || 0;
+    document.getElementById('savedAmt').value = item.saved || 0;
+    document.getElementById('vettedAmt').value = item.vetted || 0;
+    document.getElementById('unvettedAmt').value = item.unvetted || 0;
+    document.getElementById('chargedMonth').value = item.chargedMonth || '';
+
+    document.getElementById('formHeader').innerHTML = `<i class="fa-solid fa-pen-to-square me-2"></i>Edit TA Record`;
+    document.getElementById('formModeBadge').innerText = "Edit Mode";
+    document.getElementById('formModeBadge').className = "badge bg-warning text-dark fw-semibold";
+    document.getElementById('submitBtn').innerHTML = `<i class="fa-solid fa-rotate me-1"></i> Update Record`;
+    document.getElementById('submitBtn').className = "btn btn-warning w-100 py-2 fw-semibold";
+    document.getElementById('cancelBtn').classList.remove('d-none');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function resetForm() {
+    document.getElementById('taForm').reset();
+    document.getElementById('editRecordId').value = '';
+    document.getElementById('vettedAmt').value = '';
+    document.getElementById('formHeader').innerHTML = `<i class="fa-solid fa-pen-to-square me-2"></i>Data Entry Form`;
+    document.getElementById('formModeBadge').innerText = "Entry Mode";
+    document.getElementById('formModeBadge').className = "badge bg-light text-primary fw-semibold";
+    document.getElementById('submitBtn').innerHTML = `<i class="fa-solid fa-floppy-disk me-1"></i> Save Record`;
+    document.getElementById('submitBtn').className = "btn btn-success w-100 py-2 fw-semibold";
+    document.getElementById('cancelBtn').classList.add('d-none');
+  }
+
+  function deleteRecord(id) {
+    if (confirm("Are you sure you want to delete this claim record?")) {
+      if (dbRef) {
+        dbRef.child(id).remove();
+      } else {
+        localData = localData.filter(item => item.id !== id);
+        saveLocalStorage();
+        renderUI();
+      }
+    }
+  }
+
+  function saveLocalStorage() {
+    localStorage.setItem("ta_claims_local", JSON.stringify(localData));
+  }
+
+  // --- 3. UI RENDERING & AGGREGATION ---
+  function renderUI() {
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = '';
+
+    let totalClaimed = 0, totalSaved = 0, totalVetted = 0, totalUnvetted = 0;
+    let notChargedCount = 0;
+    const billUnitSummary = {};
+
+    localData.forEach(item => {
+      totalClaimed += item.claimed;
+      totalSaved += item.saved;
+      totalVetted += item.vetted;
+      totalUnvetted += (item.unvetted || 0);
+
+      const isCharged = Boolean(item.chargedMonth && item.chargedMonth.trim());
+      if (!isCharged) notChargedCount++;
+
+      // Bill Unit Aggregation
+      if (!billUnitSummary[item.billUnit]) {
+        billUnitSummary[item.billUnit] = { count: 0, claimed: 0, saved: 0, vetted: 0, unvetted: 0, charged: 0, pending: 0 };
+      }
+      billUnitSummary[item.billUnit].count += 1;
+      billUnitSummary[item.billUnit].claimed += item.claimed;
+      billUnitSummary[item.billUnit].saved += item.saved;
+      billUnitSummary[item.billUnit].vetted += item.vetted;
+      billUnitSummary[item.billUnit].unvetted += (item.unvetted || 0);
+      if (isCharged) billUnitSummary[item.billUnit].charged++;
+      else billUnitSummary[item.billUnit].pending++;
+
+      // Table Row
+      const chargedBadge = isCharged
+        ? `<span class="badge badge-charged"><i class="fa-solid fa-circle-check me-1"></i>${formatMonthYYYY(item.chargedMonth)}</span>`
+        : `<span class="badge badge-not-charged"><i class="fa-solid fa-hourglass-half me-1"></i>Yet not charged</span>`;
+
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="fw-semibold">${escapeHtml(item.dealer)}</td>
+        <td>${item.feedDate || '-'}</td>
+        <td>${formatMonthYYYY(item.taMonth)}</td>
+        <td><span class="badge bg-secondary-subtle text-dark border">${escapeHtml(item.billUnit)}</span></td>
+        <td>₹${item.claimed.toFixed(2)}</td>
+        <td class="text-success">₹${item.saved.toFixed(2)}</td>
+        <td class="fw-bold text-info">₹${item.vetted.toFixed(2)}</td>
+        <td class="fw-bold text-warning-emphasis">₹${(item.unvetted || 0).toFixed(2)}</td>
+        <td>${chargedBadge}</td>
+        <td>
+          <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-warning" onclick="editRecord('${item.id}')" title="Edit"><i class="fa-solid fa-pen"></i></button>
+            <button class="btn btn-outline-danger" onclick="deleteRecord('${item.id}')" title="Delete"><i class="fa-solid fa-trash"></i></button>
+          </div>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    if (localData.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="10" class="text-muted py-4">No TA records logged yet.</td></tr>`;
+    }
+
+    // Update Summary Metric Cards
+    document.getElementById('sumClaimed').innerText = `₹ ${totalClaimed.toFixed(2)}`;
+    document.getElementById('sumSaved').innerText = `₹ ${totalSaved.toFixed(2)}`;
+    document.getElementById('sumVetted').innerText = `₹ ${totalVetted.toFixed(2)}`;
+    document.getElementById('sumUnvetted').innerText = `₹ ${totalUnvetted.toFixed(2)}`;
+    document.getElementById('notChargedCount').innerText = `${notChargedCount} Records`;
+
+    // Render Bill Unit Summary Table
+    const summaryBody = document.getElementById('summaryBody');
+    summaryBody.innerHTML = '';
+    const buKeys = Object.keys(billUnitSummary);
+
+    if (buKeys.length === 0) {
+      summaryBody.innerHTML = `<tr><td colspan="7" class="text-muted py-3">No summary data available</td></tr>`;
+    } else {
+      buKeys.forEach(bu => {
+        const stats = billUnitSummary[bu];
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><strong>${escapeHtml(bu)}</strong></td>
+          <td>${stats.count}</td>
+          <td>₹ ${stats.claimed.toFixed(2)}</td>
+          <td>₹ ${stats.saved.toFixed(2)}</td>
+          <td class="text-info fw-bold">₹ ${stats.vetted.toFixed(2)}</td>
+          <td class="text-warning-emphasis fw-bold">₹ ${stats.unvetted.toFixed(2)}</td>
+          <td>
+            <span class="badge bg-success-subtle text-success">${stats.charged} Charged</span>
+            ${stats.pending > 0 ? `<span class="badge bg-danger-subtle text-danger ms-1">${stats.pending} Pending</span>` : ''}
+          </td>
+        `;
+        summaryBody.appendChild(tr);
+      });
+    }
+  }
+
+  // --- 4. EXCEL & JSON EXPORT/IMPORT ---
+  function exportToExcel() {
+    if (localData.length === 0) {
+      alert("No claim data available to export.");
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Detailed Claims
+    const recordsWS = XLSX.utils.json_to_sheet(localData.map(d => ({
+      "Dealer Name": d.dealer,
+      "Feed Date": d.feedDate,
+      "TA Month": formatMonthYYYY(d.taMonth),
+      "Bill Unit": d.billUnit,
+      "Claimed Amount (₹)": d.claimed,
+      "Saved Amount (₹)": d.saved,
+      "Vetted Amount (₹)": d.vetted,
+      "Unvetted Amount (₹)": d.unvetted || 0,
+      "Charged Month": (d.chargedMonth && d.chargedMonth.trim()) ? formatMonthYYYY(d.chargedMonth) : "Yet not charged"
+    })));
+    XLSX.utils.book_append_sheet(wb, recordsWS, "Detailed Claims");
+
+    // Sheet 2: Bill Unit Summary
+    const summaryData = {};
+    localData.forEach(item => {
+      if (!summaryData[item.billUnit]) {
+        summaryData[item.billUnit] = { 
+          "Bill Unit": item.billUnit, 
+          "Total Records": 0,
+          "Total Claimed (₹)": 0, 
+          "Total Saved (₹)": 0, 
+          "Total Vetted (₹)": 0,
+          "Total Unvetted (₹)": 0,
+          "Charged Count": 0,
+          "Yet Not Charged Count": 0
+        };
+      }
+      summaryData[item.billUnit]["Total Records"] += 1;
+      summaryData[item.billUnit]["Total Claimed (₹)"] += item.claimed;
+      summaryData[item.billUnit]["Total Saved (₹)"] += item.saved;
+      summaryData[item.billUnit]["Total Vetted (₹)"] += item.vetted;
+      summaryData[item.billUnit]["Total Unvetted (₹)"] += (item.unvetted || 0);
+      if (item.chargedMonth && item.chargedMonth.trim()) summaryData[item.billUnit]["Charged Count"]++;
+      else summaryData[item.billUnit]["Yet Not Charged Count"]++;
+    });
+
+    const summaryWS = XLSX.utils.json_to_sheet(Object.values(summaryData));
+    XLSX.utils.book_append_sheet(wb, summaryWS, "Bill Unit Summary");
+
+    XLSX.writeFile(wb, "TA_Claims_Summary.xlsx");
+  }
+
+  function exportJSON() {
+    if (localData.length === 0) {
+      alert("No data available to backup.");
+      return;
+    }
+    const blob = new Blob([JSON.stringify(localData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "TA_Claims_Backup.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function importData(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        const data = JSON.parse(e.target.result);
+        if (Array.isArray(data)) {
+          if (dbRef) {
+            data.forEach(item => {
+              delete item.id;
+              dbRef.push(item);
+            });
+          } else {
+            localData = [...localData, ...data];
+            saveLocalStorage();
+            renderUI();
+          }
+          alert("Data imported successfully!");
+        }
+      } catch (err) {
+        alert("Invalid JSON file format.");
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str).replace(/[&<>"']/g, function(m) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
+    });
+  }
+
+  // Initial startup
+  initFirebase();
+  if (!dbRef) renderUI();
+</script>
+</body>
+</html>
